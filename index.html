@@ -162,6 +162,20 @@ table.rs tr:last-child td{border-bottom:0}
 .foot p{margin:0 0 9px}
 .foot code{font-family:var(--f-mono);font-size:12.5px;background:var(--sunken);
            padding:1px 5px;border-radius:2px}
+.channels{display:flex;flex-wrap:wrap;gap:7px;align-items:center;padding:11px 16px;
+  border-bottom:1px solid var(--rule);background:var(--sunken)}
+.channels .lab{font-family:var(--f-mono);font-size:10.5px;letter-spacing:.09em;
+  text-transform:uppercase;color:var(--ink-3);margin-right:3px}
+.channels button{font-family:var(--f-mono);font-size:11.5px;font-weight:500;
+  letter-spacing:.05em;padding:4px 11px;min-height:0;background:var(--surface)}
+.channels button[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);
+  color:var(--surface)}
+:root[data-theme="dark"] .channels button[aria-pressed="true"],
+:root:not([data-theme="light"]) .channels button[aria-pressed="true"]{color:#0F120F}
+@media (prefers-color-scheme: light){
+  :root:not([data-theme="dark"]) .channels button[aria-pressed="true"]{color:#FBFCF9}}
+.channels button[disabled]{opacity:.45;cursor:not-allowed}
+
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 </style>
 <style>html{color-scheme:light dark}img{max-width:100%}[hidden]{display:none!important}</style>
@@ -230,6 +244,7 @@ table.rs tr:last-child td{border-bottom:0}
       <h2>Readout</h2>
       <div class="verdict" id="verdict"><span class="dot"></span>
         <span class="t">Waiting</span><span class="s">load an image</span></div>
+      <div class="channels" id="channels" hidden></div>
       <div class="body">
         <p class="payload empty" id="payload">&mdash;</p>
         <div class="payload-row">
@@ -839,10 +854,180 @@ function parseSegments(data,version){
   return {text:out,segs:segs};
 }
 
+/* ============ RGB-packed symbols: three codes, one per colour channel ============ */
+/* Take three separate QR codes, put one in the red channel, one in the green and
+   one in the blue, and save the result as a single colour PNG. Every pixel is then
+   one of the eight pure RGB corner colours and no ordinary reader sees anything but
+   noise. Split the channels and three perfectly ordinary symbols come back - which
+   may of course each have their finder patterns erased, which is what the rest of
+   this file is for. */
+const CHANNEL_NAMES=["red","green","blue"];
+
+function detectPacked(px,w,h,purity,near){
+  purity=(purity==null)?0.98:purity; near=(near==null)?40:near;
+  const n=w*h; let pure=0, differ=false;
+  for(let i=0;i<n;i++){
+    const r=px[i*4],g=px[i*4+1],b=px[i*4+2];
+    if(Math.min(r,255-r)<=near&&Math.min(g,255-g)<=near&&Math.min(b,255-b)<=near) pure++;
+    if(!differ&&((r>=128)!==(g>=128)||(g>=128)!==(b>=128))) differ=true;
+  }
+  return differ && pure/n>=purity;
+}
+
+function packedModules(px,w,h,tol){
+  tol=(tol==null)?0.02:tol;
+  const bits=new Uint8Array(w*h);
+  for(let i=0;i<w*h;i++)
+    bits[i]=(px[i*4]>=128?1:0)|(px[i*4+1]>=128?2:0)|(px[i*4+2]>=128?4:0);
+
+  /* Module pitch from run lengths. Lengths that cover a negligible share of the
+     image are ignored: a rescaled PNG leaves 1px seams at module boundaries, and
+     those must not be mistaken for the pitch. */
+  const counts=[];
+  function tally(get,len,count,step){
+    for(let k=0;k<count;k+=step){
+      let run=1;
+      for(let i=1;i<len;i++){
+        if(get(k,i)===get(k,i-1)) run++;
+        else { counts[run]=(counts[run]||0)+1; run=1; }
+      }
+      counts[run]=(counts[run]||0)+1;
+    }
+  }
+  tally((y,x)=>bits[y*w+x], w, h, Math.max(1,Math.floor(h/64)));
+  tally((x,y)=>bits[y*w+x], h, w, Math.max(1,Math.floor(w/64)));
+
+  let covered=0, peak=0, peakLen=1;
+  for(let L=1;L<counts.length;L++){
+    const c=counts[L]||0; covered+=L*c;
+    if(c>peak){ peak=c; peakLen=L; }
+  }
+  let smallest=0;
+  for(let L=1;L<counts.length;L++)
+    if((counts[L]||0)*L>=0.05*covered){ smallest=L; break; }
+  if(!smallest) return null;
+
+  const cands=[];
+  for(const u of new Set([smallest,peakLen])){
+    const n0=Math.round(w/u);
+    for(let d=-4;d<=4;d++){
+      const n=n0+d;
+      if(n>=21&&n<=400&&!cands.some(c=>c.n===n)) cands.push({n:n,d:Math.abs(d)});
+    }
+  }
+  cands.sort((a,b)=>a.d-b.d);
+
+  for(const cand of cands){
+    const n=cand.n;
+    if(h/n<1||w/n<1) continue;
+    const mods=new Uint8Array(n*n);
+    for(let r=0;r<n;r++){
+      const y=Math.min(h-1,Math.floor(r*h/n+h/(2*n)));
+      for(let c=0;c<n;c++)
+        mods[r*n+c]=bits[y*w+Math.min(w-1,Math.floor(c*w/n+w/(2*n)))];
+    }
+    let bad=0;
+    for(let y=0;y<h;y++){
+      const row=Math.min(n-1,Math.floor(y*n/h))*n;
+      for(let x=0;x<w;x++)
+        if(mods[row+Math.min(n-1,Math.floor(x*n/w))]!==bits[y*w+x]) bad++;
+    }
+    if(bad/(w*h)<tol) return {n:n,mods:mods};
+  }
+  return null;
+}
+
+function packedSymbolBox(mods,n){
+  const quiet=mods[0];
+  let r0=n,c0=n,r1=-1,c1=-1;
+  for(let r=0;r<n;r++) for(let c=0;c<n;c++) if(mods[r*n+c]!==quiet){
+    if(r<r0)r0=r; if(r>r1)r1=r; if(c<c0)c0=c; if(c>c1)c1=c; }
+  if(r1<0) return {r0:0,c0:0,size:n};
+  const span=Math.max(r1-r0,c1-c0)+1;
+  let size=21,bd=1e9;
+  for(let v=1;v<=40;v++){ const s=17+4*v, d=Math.abs(s-span); if(d<bd){ bd=d; size=s; } }
+  return {r0:Math.max(0,Math.min(r0,n-size)),c0:Math.max(0,Math.min(c0,n-size)),size:size};
+}
+
+/* A blank finder corner is not a light corner: it is a corner somebody deleted.
+   Calling it unknown keeps it out of the structure score, and decodeSymbol puts
+   the standard's own modules back in its place. */
+function blankErasedFinders(mat,n){
+  for(const corner of [[0,0],[0,n-8],[n-8,0]]){
+    const r0=corner[0], c0=corner[1];
+    let any=false;
+    for(let r=r0;r<r0+8&&!any;r++)
+      for(let c=c0;c<c0+8;c++) if(mat[r*n+c]===1){ any=true; break; }
+    if(!any) for(let r=r0;r<r0+8;r++) for(let c=c0;c<c0+8;c++) mat[r*n+c]=UNK;
+  }
+  return mat;
+}
+
+/* Try both polarities and keep whichever agrees better with the standard: a
+   packed image may store dark modules as the bright bit or the dark one. */
+function packedChannelMatrix(mods,n,box,ci,version){
+  const size=box.size, bit=1<<ci;
+  let best=null;
+  for(const brightIsDark of [true,false]){
+    const m=new Int8Array(size*size);
+    for(let r=0;r<size;r++) for(let c=0;c<size;c++){
+      const bright=(mods[(box.r0+r)*n+(box.c0+c)]&bit)!==0;
+      m[r*size+c]=(bright===brightIsDark)?1:0;
+    }
+    blankErasedFinders(m,size);
+    const o=orient(m,size,version);
+    if(!best||o.score>best.o.score) best={o:o,brightIsDark:brightIsDark};
+  }
+  return best;
+}
+
+/* Returns an array of {name, res, err} or null when the image is not packed. */
+function recoverPacked(px,w,h,forcedVersion){
+  if(!detectPacked(px,w,h)) return null;
+  const grid=packedModules(px,w,h);
+  if(!grid) return null;
+  const box=packedSymbolBox(grid.mods,grid.n);
+  let version=(box.size-17)/4;
+  if(forcedVersion){ version=forcedVersion; box.size=17+4*version; }
+  if(!(version>=1&&version<=40&&version===Math.floor(version))) return null;
+
+  const module=w/grid.n;
+  const out=[];
+  for(let ci=0;ci<3;ci++){
+    const pick=packedChannelMatrix(grid.mods,grid.n,box,ci,version);
+    let res=null,err=null;
+    try{
+      res=decodeSymbol(pick.o.mat,box.size,version);
+      res.orient=pick.o;
+      res.geo={x0:box.c0*module,y0:box.r0*module,module:module,n:box.size,finders:[]};
+      res.channel=CHANNEL_NAMES[ci];
+    }catch(e){ err=e.message; }
+    out.push({name:CHANNEL_NAMES[ci],res:res,err:err});
+  }
+  return out.some(o=>o.res) ? out : null;
+}
+
+function renderChannels(){
+  const el=$("channels");
+  if(!packedResults){ el.hidden=true; el.innerHTML=""; return; }
+  el.hidden=false;
+  el.innerHTML='<span class="lab">RGB&#8209;packed &mdash; one symbol per channel</span>'+
+    packedResults.map((p,i)=>'<button type="button" data-ch="'+i+'"'+
+      (p.res?"":" disabled")+' aria-pressed="'+(p.active?"true":"false")+'">'+
+      p.name+(p.res?"":" (failed)")+"</button>").join("");
+  el.querySelectorAll("button[data-ch]").forEach(b=>b.addEventListener("click",function(){
+    const i=+b.dataset.ch;
+    if(!packedResults[i].res) return;
+    packedResults.forEach((p,k)=>{ p.active=(k===i); });
+    lastResult=packedResults[i].res; lastGeo=lastResult.geo;
+    renderChannels(); showResult(lastResult); drawSource([],lastGeo);
+  }));
+}
+
 /* ===================== pipeline + UI ===================== */
 const $=id=>document.getElementById(id);
 const SAMPLE="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAN4AAADeCAIAAADdBSngAAAD5ElEQVR42u3dXW7UMBQGUEK7m+5xkLpHuptqeEUECetyf5z0nEfUDkz4ZOuLHed4Pp/fYD/fXQJEE0QT0QTRRDRBNEE0EU0QTUQTRBNEE9EE0UQ0QTQRTRBNEE1EE0QT0YQZr1kf9Pb++WUv4sePyGU8nwBwHMfg52TJOtnAqIkJHUQT0QTRREPn//v4bu277jzAursBRk1M6CCaiCaIJho6v/v5ePnzjx6RthvryOf+m9W1d2v6Rk1M6CCaiCaIJhq6S/CPPt7Yf1cacV1nN2qCaCKaIJqIJmjo+/TxWP/N+q26pm/UBNFENEE0QTTR0Hfu4ytW2ndWH+88823/lXejJqIJoologmiiod/DX85ze0R2jMdWulf6b2wHe6yzX3Et3qiJaIJoIpogmmjoV7Rynlus/+7/Myvd36gJoologmiCaKKhV1hZH4/11ro19Cs+dR7bmW/UxIQOogmiiWjCXRv6uY9nnd5W92x451PndefGz67FGzUxoYNoIpogmmjos2L71bM6adZbwmfvD6x8Tlb3t4aOCR1EE0QT0YR7NPSs89xW2mXsVPa63emxbpvVtbP2/Ne9n92oiQkdRBPRBNFEQ2/t4yFZq8+dK+Z136Lu+fqs+wNGTUzoIJqIJogmzDb0lT7euY6c9Tmde+w734ee9RS8NXRM6CCaIJqIJoQcdauidW8c62ygnXcMsq5h3fXJWtM3amJCB9FENEE04SRtDT2r/3Y+dT57n6HuzeZZq/POcgfRRDRBNBFNuGJD7zxVrG5lOaulZt1n6OzInbsOjJqY0EE0EU0QTahr6Fltt26vdd3ZaFntu7PFd553Z9TEhA6iiWiCaMKCtOfQ694AntXiY98iq+123me44tvPjZqY0EE0EU0QTTT02WeNs3piZyOu+9tjjXj2roJRExM6iCaIJqIJ+zf0uqeq92/NnXceOjnLHUQT0QTRRDThig19+IuVndU2u1d//9P2NHRM6CCaIJqIJsw29NnV3s5GXNdS6/ar79a+jZqY0EE0EU0QTTgpPMu9c//8ys9k/Xvq7gbM9ujO98oZNTGhg2gimiCa0NnQY721rm/WrSzX/VbsLfOd/4N192GMmpjQQTQRTRBNNPR7mH1zWdbndO57n/1koyYmdBBNRBNEEw39K3/52VPZO0+Bi/3W7CmCRk1M6CCaiCaIJhr6bo24zuz74GLXZ+WT696ibpc7iCaiCaKJaMIVG/pup7t3vkW9riN3Xh+jJogmogmiiWhCo9u+Dx2jJogmogmiCaKJaIJoIpogmiCaiCaIJqIJoologmiCaCKaIJqIJogmiCaiCSG/ANG1OD69RJvzAAAAAElFTkSuQmCC";
-let curImage=null, curName="sample", pickRGB=null, lastResult=null, lastGeo=null;
+let curImage=null, curName="sample", pickRGB=null, lastResult=null, lastGeo=null, packedResults=null;
 
 for(let v=1;v<=40;v++){ const o=document.createElement("option");
   o.value=v; o.textContent="Version "+v+"  ("+(17+4*v)+"×"+(17+4*v)+")"; $("ver").appendChild(o); }
@@ -855,6 +1040,26 @@ function analyse(){
   cx.drawImage(curImage,0,0);
   const px=cx.getImageData(0,0,w,h).data;
   const opt={mode:$("mode").value,rgb:pickRGB,tol:+$("tol").value,smooth:+$("smooth").value};
+
+  /* Three codes stacked in the colour channels? Handle them before anything
+     else - an ordinary finder search on the composite finds nothing. */
+  packedResults=null;
+  try{
+    const packed=recoverPacked(px,w,h,+$("ver").value||0);
+    if(packed){
+      packed.forEach((p,i)=>{ p.active=false; });
+      const first=packed.findIndex(p=>p.res);
+      packed[first].active=true;
+      packedResults=packed;
+      lastResult=packed[first].res; lastGeo=lastResult.geo;
+      renderChannels();
+      drawSource([],lastGeo);
+      showResult(lastResult);
+      return;
+    }
+  }catch(e){ packedResults=null; }
+  renderChannels();
+
   let masks, fs, geo, best, res;
   try{
     masks=classify(px,w,h,opt);
@@ -942,7 +1147,9 @@ function showResult(r){
     "a block went past the unique-decoding bound, or a visible module disagrees");
   $("payload").textContent=r.text||"(empty payload)";
   $("payload").className="payload";
-  const F=[["Symbol","version "+r.version+"  "+r.n+"×"+r.n],
+  const F=[];
+  if(r.channel) F.push(["Channel",r.channel+" of an RGB-packed image"]);
+  F.push(["Symbol","version "+r.version+"  "+r.n+"×"+r.n],
     ["Error correction","level "+r.ecl],["Data mask",String(r.mask)],
     ["Module pitch",r.geo.module.toFixed(2)+" px"],
     ["Finders located",r.geo.finders.length+" of 3"],
@@ -950,7 +1157,7 @@ function showResult(r){
     ["Structure fit",r.orient.score.toFixed(3)],
     ["Obscured modules",r.obscured+" of "+(r.n*r.n)],
     ["Erased data bits",String(r.erasedData)],
-    ["Visible conflicts",String(r.mismatch)]];
+    ["Visible conflicts",String(r.mismatch)]);
   $("facts").innerHTML=F.map(([k,v])=>"<dt>"+k+"</dt><dd>"+esc(v)+"</dd>").join("");
   $("rsbody").innerHTML=r.blocks.map(b=>{
     const pct=Math.min(100,Math.round(100*b.used/b.capacity));
@@ -974,6 +1181,7 @@ function esc(s){ return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",
 function reportText(){
   const r=lastResult; if(!r) return "No symbol recovered.";
   let t="QR RECOVERY REPORT ("+curName+")\n";
+  if(r.channel) t+="Colour channel    : "+r.channel+" of an RGB-packed image\n";
   t+="Symbol            : version "+r.version+"  "+r.n+"x"+r.n+"\n";
   t+="Error correction  : level "+r.ecl+"\nData mask         : "+r.mask+"\n";
   t+="Module pitch      : "+r.geo.module.toFixed(3)+" px  origin ("+
