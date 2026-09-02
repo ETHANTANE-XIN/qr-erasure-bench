@@ -1045,6 +1045,199 @@ def grid_text(known):
 
 
 # --------------------------------------------------------------------------- #
+#  RGB-packed symbols - three codes stacked in the colour channels             #
+# --------------------------------------------------------------------------- #
+#
+# A favourite trick in forensics exercises: take three separate QR codes, put
+# one in the red channel, one in the green and one in the blue, and save the
+# result as a single colour PNG.  Every pixel is then one of the eight pure RGB
+# corner colours, and no ordinary reader sees anything but noise.  Splitting the
+# channels gives three perfectly ordinary symbols back - which may of course
+# each have their finder patterns erased, which is what the rest of this file
+# is for.
+
+CHANNEL_NAMES = ("red", "green", "blue")
+
+
+def detect_packed(rgb, purity=0.98, near=40):
+    """True when the image is essentially the eight pure RGB corner colours and
+    the three channels are not all identical."""
+    a = rgb.astype(np.int16)
+    pure = (np.minimum(a, 255 - a) <= near).all(axis=2)
+    if pure.mean() < purity:
+        return False
+    b = a >= 128
+    return not (np.array_equal(b[..., 0], b[..., 1]) and
+                np.array_equal(b[..., 1], b[..., 2]))
+
+
+def packed_modules(rgb, tol=0.02):
+    """Sample the module grid of a packed image.
+
+    Packed symbols are synthetic: axis aligned, one exact module pitch, no
+    perspective.  So rather than hunting for finder patterns - which may have
+    been erased in every channel - measure the pitch from the run lengths and
+    keep the grid that actually reproduces the image.
+
+    Returns (n, bools) with bools[r, c, channel] True where the channel is
+    bright, or (None, None) if no grid fits.
+    """
+    b = rgb.astype(np.int16) >= 128
+    H, W = b.shape[:2]
+    packed = b[..., 0] | (b[..., 1] << 1) | (b[..., 2] << 2)
+
+    def take(n):
+        ys = np.clip((np.arange(n) * (H / n) + H / (2 * n)).astype(int), 0, H - 1)
+        xs = np.clip((np.arange(n) * (W / n) + W / (2 * n)).astype(int), 0, W - 1)
+        return b[np.ix_(ys, xs)]
+
+    # Module pitch from run lengths.  Ignore lengths that account for a
+    # negligible share of the image: a scaled PNG leaves 1px seams at module
+    # boundaries, and those must not be mistaken for the pitch.
+    lens = []
+    for line in list(packed[::max(1, H // 64)]) + list(packed.T[::max(1, W // 64)]):
+        idx = np.flatnonzero(np.diff(line)) + 1
+        lens.append(np.diff(np.concatenate(([0], idx, [line.size]))))
+    runs = np.concatenate(lens) if lens else np.array([], int)
+    if runs.size == 0:
+        return None, None
+    counts = np.bincount(runs)
+    covered = counts * np.arange(counts.size)
+    significant = np.flatnonzero(covered >= 0.05 * covered.sum())
+    if significant.size == 0:
+        return None, None
+    units = {int(significant[0]), int(counts.argmax()), int(np.median(runs))}
+
+    cands, seen = [], set()
+    for u in sorted(units):
+        n0 = int(round(W / max(1, u)))
+        for d in range(-4, 5):
+            n = n0 + d
+            if 21 <= n <= 400 and n not in seen:
+                seen.add(n)
+                cands.append((abs(d), n))
+    for _, n in sorted(cands):
+        if H / n < 1 or W / n < 1:
+            continue
+        yi = np.clip(np.arange(H) * n // H, 0, n - 1)
+        xi = np.clip(np.arange(W) * n // W, 0, n - 1)
+        if (take(n)[np.ix_(yi, xi)] != b).any(axis=2).mean() < tol:
+            return n, take(n)
+    return None, None
+
+
+def packed_symbol_box(mods):
+    """Locate the symbol inside the sampled grid: (row0, col0, size)."""
+    n = mods.shape[0]
+    diff = (mods != mods[0, 0]).any(axis=2)          # differs from the quiet zone
+    if not diff.any():
+        return 0, 0, n
+    ys, xs = np.nonzero(diff)
+    r0, c0 = int(ys.min()), int(xs.min())
+    span = max(int(ys.max()) - r0, int(xs.max()) - c0) + 1
+    legal = [17 + 4 * v for v in range(1, 41)]
+    size = min(legal, key=lambda s: abs(s - span))
+    r0 = max(0, min(r0, n - size))
+    c0 = max(0, min(c0, n - size))
+    return r0, c0, size
+
+
+def blank_erased_finders(mat):
+    """Mark any finder-plus-separator corner that is uniformly light as unknown.
+
+    A blank corner is not a light corner: it is a corner somebody deleted.
+    Calling it unknown keeps it out of the structure score, and decode() puts
+    the standard's own modules back in its place.
+    """
+    n = len(mat)
+    for r0, c0 in ((0, 0), (0, n - 8), (n - 8, 0)):
+        if not mat[r0:r0 + 8, c0:c0 + 8].any():
+            mat[r0:r0 + 8, c0:c0 + 8] = UNK
+    return mat
+
+
+def packed_channel_matrix(mods, r0, c0, size, ci, version):
+    """Best matrix for one channel, choosing the polarity that fits the standard."""
+    sub = mods[r0:r0 + size, c0:c0 + size, ci]
+    best = None
+    for bright_is_dark in (True, False):
+        m = np.where(sub == bright_is_dark, DARK, LIGHT).astype(np.int8)
+        m = blank_erased_finders(m)
+        m, info = orient(m, version)
+        s = score_matrix(m, version)[0]
+        if best is None or s > best[0]:
+            info["bright_modules_are_dark"] = bool(bright_is_dark)
+            best = (s, m, info)
+    return best[1], best[2]
+
+
+def recover_packed(rgb, args):
+    """Decode every channel of an RGB-packed image.  Returns a list of
+    (channel_name, Result or None, error message or None), or None if the image
+    turns out not to be a packed symbol after all."""
+    n, mods = packed_modules(rgb)
+    if n is None:
+        return None
+    r0, c0, size = packed_symbol_box(mods)
+    version = (size - 17) // 4
+    if not 1 <= version <= 40:
+        return None
+    if args.version and args.version != version:
+        version = args.version
+        size = 17 + 4 * version
+    out = []
+    for ci, name in enumerate(CHANNEL_NAMES):
+        mat, info = packed_channel_matrix(mods, r0, c0, size, ci, version)
+        info["obscured_total"] = int(np.count_nonzero(mat == UNK))
+        info["packed_grid"] = "%d modules, symbol %dx%d at (%d,%d)" % (n, size, size, r0, c0)
+        try:
+            out.append((name, decode(mat, version, info), None))
+        except SystemExit as exc:
+            out.append((name, None, str(exc)))
+    return out
+
+
+# --------------------------------------------------------------------------- #
+
+def print_packed(results, args):
+    """Report an RGB-packed image: one symbol per colour channel."""
+    ok = 0
+    lines = []
+    for name, res, err in results:
+        if res is None:
+            lines.append("%-6s : FAILED - %s" % (name, err.replace("\n", " ")))
+            continue
+        ok += 1
+        lines.append("%-6s : %s%s" % (name, res.text,
+                                      "" if res.certain else "   [UNCERTAIN]"))
+        if args.rebuild:
+            stem = args.rebuild[:-4] if args.rebuild.lower().endswith(".png") else args.rebuild
+            render(res.matrix, path="%s-%s.png" % (stem, name))
+    if args.quiet:
+        for name, res, err in results:
+            if res is not None:
+                print(res.text)
+        return 0 if ok else 1
+
+    print("=" * 68)
+    print("  RGB-PACKED SYMBOL - three codes, one per colour channel")
+    print("=" * 68)
+    for name, res, err in results:
+        if res is None:
+            continue
+        print("%-6s : version %d, level %s, mask %d, %d obscured module(s), %s"
+              % (name, res.version, res.ecl, res.mask, res.obscured_modules,
+                 "CERTAIN" if res.certain else "UNCERTAIN"))
+    print("-" * 68)
+    print("PAYLOADS:")
+    for line in lines:
+        print("  " + line)
+    print("-" * 68)
+    if args.rebuild:
+        stem = args.rebuild[:-4] if args.rebuild.lower().endswith(".png") else args.rebuild
+        print("Repaired symbols written to %s-{red,green,blue}.png" % stem)
+    return 0 if ok else 1
+
 
 def main(argv=None):
     ap = argparse.ArgumentParser(
@@ -1070,10 +1263,19 @@ def main(argv=None):
     ap.add_argument("--report", metavar="TXT", help="also write the report to a file")
     ap.add_argument("--grid-dump", metavar="TXT", help="write the sampled module grid")
     ap.add_argument("--json", metavar="JSON", help="write machine-readable results")
+    ap.add_argument("--no-split", action="store_true",
+                    help="do not treat an 8-colour image as three codes packed into "
+                         "the R, G and B channels")
     ap.add_argument("--quiet", action="store_true", help="print only the payload")
     args = ap.parse_args(argv)
 
     rgb = np.array(Image.open(args.image).convert("RGB"))
+
+    if not args.no_split and detect_packed(rgb):
+        packed = recover_packed(rgb, args)
+        if packed:
+            return print_packed(packed, args)
+
     occ = None
     if args.occlusion:
         h = args.occlusion.lstrip("#")
