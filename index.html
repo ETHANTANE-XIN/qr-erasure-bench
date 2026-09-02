@@ -1,0 +1,1070 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="Recover QR codes that have been scribbled over, torn or redacted. Obscured modules are decoded as Reed-Solomon erasures, entirely in your browser.">
+<meta name="theme-color" content="#f1f3ee" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0f120f" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%23fbfcf9'/%3E%3Cpath fill='%23171b16' d='M1 1h5v5H1zm1 1v3h3V2zM10 1h5v5h-5zm1 1v3h3V2zM1 10h5v5H1zm1 1v3h3v-3zM8 1h1v1H8zM8 3h1v2H8zM7 6h2v1H7zM10 7h1v1h-1zM12 7h3v1h-3zM7 8h1v3H7zM9 8h1v1H9zM11 9h1v2h-1zM13 9h1v1h-1zM9 10h1v2H9zM12 11h3v1h-3zM8 12h1v3H8zM10 12h1v1h-1zM12 13h1v2h-1zM14 13h1v2h-1zM10 14h2v1h-2z'/%3E%3C/svg%3E">
+<title>QR Erasure Bench</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --ground:#F1F3EE; --surface:#FBFCF9; --sunken:#E7EAE2;
+  --ink:#171B16; --ink-2:#5A625A; --ink-3:#858D83;
+  --rule:#D2D8CE; --rule-strong:#B6BFB2;
+  --accent:#2C6B4A; --accent-soft:#DEEAE1;
+  --ok:#2C6B4A; --warn:#8A6410; --bad:#A2382A;
+  --marker:#2A81FC; --marker-soft:#DCE9FE;
+  --mod-dark:#171B16; --mod-light:#FBFCF9;
+  --shadow:0 1px 2px rgba(23,27,22,.06), 0 8px 20px -12px rgba(23,27,22,.18);
+  --f-ui:"Archivo", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-mono:"IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --ground:#0F120F; --surface:#171B16; --sunken:#1E241D;
+    --ink:#E7EBE3; --ink-2:#98A295; --ink-3:#727C70;
+    --rule:#2B322A; --rule-strong:#3C453A;
+    --accent:#7FC79A; --accent-soft:#1B2A20;
+    --ok:#7FC79A; --warn:#D8A64C; --bad:#E4897A;
+    --marker:#5FA0FF; --marker-soft:#16233A;
+    --mod-dark:#0B0D0B; --mod-light:#D9DED6;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 24px -14px rgba(0,0,0,.7);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#0F120F; --surface:#171B16; --sunken:#1E241D;
+  --ink:#E7EBE3; --ink-2:#98A295; --ink-3:#727C70;
+  --rule:#2B322A; --rule-strong:#3C453A;
+  --accent:#7FC79A; --accent-soft:#1B2A20;
+  --ok:#7FC79A; --warn:#D8A64C; --bad:#E4897A;
+  --marker:#5FA0FF; --marker-soft:#16233A;
+  --mod-dark:#0B0D0B; --mod-light:#D9DED6;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 24px -14px rgba(0,0,0,.7);
+}
+
+*{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--f-ui);
+     font-size:15px;line-height:1.5;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1180px;margin:0 auto;padding:28px 22px 64px}
+
+/* ---------- masthead ---------- */
+.masthead{display:flex;flex-wrap:wrap;align-items:flex-end;gap:14px 24px;
+          padding-bottom:16px;border-bottom:2px solid var(--ink);margin-bottom:22px}
+.masthead h1{font-size:clamp(26px,3.4vw,38px);line-height:1.05;margin:0;font-weight:700;
+             letter-spacing:-.022em;text-wrap:balance}
+.masthead p{margin:0;color:var(--ink-2);max-width:52ch;font-size:14px}
+.stamp{margin-left:auto;font-family:var(--f-mono);font-size:11px;letter-spacing:.1em;
+       text-transform:uppercase;color:var(--ink-3);white-space:nowrap}
+
+/* ---------- controls ---------- */
+.controls{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:flex-end;
+          background:var(--surface);border:1px solid var(--rule);border-radius:3px;
+          padding:14px 16px;margin-bottom:20px;box-shadow:var(--shadow)}
+.ctl{display:flex;flex-direction:column;gap:5px}
+.ctl label{font-family:var(--f-mono);font-size:10.5px;letter-spacing:.09em;
+           text-transform:uppercase;color:var(--ink-3)}
+select,input[type=text]{font-family:var(--f-mono);font-size:13px;color:var(--ink);
+  background:var(--ground);border:1px solid var(--rule-strong);border-radius:2px;
+  padding:6px 8px;min-height:32px}
+input[type=range]{width:110px;accent-color:var(--accent)}
+button{font-family:var(--f-ui);font-size:13.5px;font-weight:600;cursor:pointer;
+  border:1px solid var(--rule-strong);background:var(--ground);color:var(--ink);
+  border-radius:2px;padding:7px 13px;min-height:32px}
+button:hover{border-color:var(--ink-2)}
+button.primary{background:var(--accent);border-color:var(--accent);
+  color:var(--surface)}
+:root[data-theme="dark"] button.primary,
+:root:not([data-theme="light"]) button.primary{color:#0F120F}
+@media (prefers-color-scheme: light){:root:not([data-theme="dark"]) button.primary{color:#FBFCF9}}
+button.primary:hover{filter:brightness(1.08)}
+button:focus-visible,select:focus-visible,input:focus-visible,
+.drop:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+/* ---------- panels ---------- */
+.cols{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.05fr);gap:20px;align-items:start}
+@media (max-width:880px){.cols{grid-template-columns:minmax(0,1fr)}}
+.panel{background:var(--surface);border:1px solid var(--rule);border-radius:3px;
+       box-shadow:var(--shadow);overflow:hidden}
+.panel > h2{margin:0;font-family:var(--f-mono);font-size:11px;letter-spacing:.13em;
+       text-transform:uppercase;color:var(--ink-2);padding:11px 16px;
+       border-bottom:1px solid var(--rule);background:var(--sunken)}
+.panel .body{padding:16px}
+
+.drop{display:block;width:100%;border:1.5px dashed var(--rule-strong);border-radius:3px;
+      background:var(--sunken);padding:10px;text-align:center;cursor:pointer}
+.drop.over{border-color:var(--accent);background:var(--accent-soft)}
+.drop canvas{max-width:100%;height:auto;display:block;margin:0 auto;image-rendering:pixelated}
+.drop .hint{font-family:var(--f-mono);font-size:11px;color:var(--ink-3);margin-top:9px;
+            letter-spacing:.04em}
+
+/* ---------- verdict ---------- */
+.verdict{display:flex;align-items:center;gap:11px;padding:13px 16px;
+         border-bottom:1px solid var(--rule)}
+.dot{width:9px;height:9px;border-radius:50%;flex:none;background:var(--ink-3)}
+.verdict .t{font-weight:600;font-size:14px}
+.verdict .s{color:var(--ink-2);font-size:13px}
+.v-ok .dot{background:var(--ok)} .v-warn .dot{background:var(--warn)} .v-bad .dot{background:var(--bad)}
+.v-ok .t{color:var(--ok)} .v-warn .t{color:var(--warn)} .v-bad .t{color:var(--bad)}
+
+.payload{font-family:var(--f-mono);font-size:14px;line-height:1.6;word-break:break-all;
+  background:var(--sunken);border:1px solid var(--rule);border-left:3px solid var(--accent);
+  border-radius:2px;padding:12px 14px;margin:0;white-space:pre-wrap;user-select:all}
+.payload.empty{color:var(--ink-3);border-left-color:var(--bad);user-select:none}
+.payload-row{display:flex;gap:10px;align-items:center;margin-top:10px;flex-wrap:wrap}
+.copied{font-family:var(--f-mono);font-size:11px;color:var(--accent);letter-spacing:.06em}
+
+/* ---------- facts ---------- */
+dl.facts{display:grid;grid-template-columns:auto 1fr;gap:0;margin:0;
+         font-family:var(--f-mono);font-size:12.5px}
+dl.facts dt{color:var(--ink-3);padding:5px 16px 5px 0;white-space:nowrap;
+            border-bottom:1px solid var(--rule)}
+dl.facts dd{margin:0;padding:5px 0;text-align:right;border-bottom:1px solid var(--rule);
+            font-variant-numeric:tabular-nums}
+dl.facts dt:last-of-type,dl.facts dd:last-of-type{border-bottom:0}
+
+table.rs{width:100%;border-collapse:collapse;table-layout:fixed;
+         font-family:var(--f-mono);font-size:12.5px;font-variant-numeric:tabular-nums}
+table.rs th{text-align:right;font-weight:500;color:var(--ink-3);font-size:10.5px;
+  letter-spacing:.07em;text-transform:uppercase;padding:0 0 6px;border-bottom:1px solid var(--rule-strong)}
+table.rs th:first-child,table.rs td:first-child{text-align:left}
+table.rs td{padding:5px 0;border-bottom:1px solid var(--rule)}
+table.rs tr:last-child td{border-bottom:0}
+.bar{display:inline-block;vertical-align:middle;width:64px;height:7px;background:var(--sunken);
+     border:1px solid var(--rule-strong);border-radius:1px;overflow:hidden;margin-left:8px}
+.bar i{display:block;height:100%;background:var(--accent)}
+.bar.hot i{background:var(--bad)}
+
+.seg{display:grid;grid-template-columns:auto auto 1fr;gap:2px 12px;font-family:var(--f-mono);
+     font-size:12.5px;align-items:baseline}
+.seg .k{color:var(--accent);letter-spacing:.05em}
+.seg .n{color:var(--ink-3);font-variant-numeric:tabular-nums;text-align:right}
+.seg .v{word-break:break-all}
+
+.notes{margin:14px 0 0;padding:11px 13px;background:var(--sunken);border-left:3px solid var(--warn);
+  border-radius:2px;font-size:13px;color:var(--ink-2)}
+.notes ul{margin:0;padding-left:17px}
+
+.maps{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:20px;margin-top:20px}
+.maps canvas,.maps img{width:100%;height:auto;image-rendering:pixelated;display:block;
+  border:1px solid var(--rule);border-radius:2px;background:var(--mod-light)}
+.legend{display:flex;flex-wrap:wrap;gap:6px 15px;margin-top:11px;font-family:var(--f-mono);
+        font-size:11px;color:var(--ink-2)}
+.legend span{display:flex;align-items:center;gap:6px}
+.sw{width:11px;height:11px;border:1px solid var(--rule-strong);border-radius:1px;flex:none}
+
+.foot{margin-top:34px;padding-top:16px;border-top:1px solid var(--rule);
+      color:var(--ink-2);font-size:13px;max-width:74ch}
+.foot h3{font-family:var(--f-mono);font-size:11px;letter-spacing:.13em;text-transform:uppercase;
+         color:var(--ink-3);margin:0 0 8px}
+.foot p{margin:0 0 9px}
+.foot code{font-family:var(--f-mono);font-size:12.5px;background:var(--sunken);
+           padding:1px 5px;border-radius:2px}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+<style>html{color-scheme:light dark}img{max-width:100%}[hidden]{display:none!important}</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="masthead">
+    <div>
+      <h1>QR Erasure Bench</h1>
+      <p>Reads QR codes that have been scribbled over, torn or redacted. Obscured
+         modules become Reed&#8209;Solomon <em>erasures</em>, which doubles the correcting
+         power an ordinary scanner gets &mdash; and tells you whether the answer is proven
+         or merely likely.</p>
+    </div>
+    <div class="stamp" id="stamp">runs entirely in this tab</div>
+  </header>
+
+  <div class="controls">
+    <div class="ctl">
+      <label for="file">Image</label>
+      <div style="display:flex;gap:8px">
+        <button class="primary" id="pick">Choose file&hellip;</button>
+        <button id="loadSample">Sample</button>
+      </div>
+      <input type="file" id="file" accept="image/*" hidden>
+    </div>
+    <div class="ctl">
+      <label for="mode">Redaction</label>
+      <select id="mode">
+        <option value="auto">Auto &mdash; any strong colour</option>
+        <option value="pick">Click the image to sample</option>
+        <option value="none">None &mdash; ink and paper only</option>
+      </select>
+    </div>
+    <div class="ctl">
+      <label for="tol">Colour tolerance <span id="tolv">70</span></label>
+      <input type="range" id="tol" min="10" max="160" value="70">
+    </div>
+    <div class="ctl">
+      <label for="smooth">Speckle filter <span id="smv">2</span></label>
+      <input type="range" id="smooth" min="0" max="6" value="2">
+    </div>
+    <div class="ctl">
+      <label for="ver">Version</label>
+      <select id="ver"><option value="0">Auto</option></select>
+    </div>
+    <div class="ctl">
+      <label>&nbsp;</label>
+      <button id="rerun">Re&#8209;analyse</button>
+    </div>
+  </div>
+
+  <div class="cols">
+    <section class="panel">
+      <h2>Source &mdash; <span id="srcname">sample</span></h2>
+      <div class="body">
+        <div class="drop" id="drop" tabindex="0" role="button"
+             aria-label="Drop a QR image here, or click to choose a file">
+          <canvas id="src" width="10" height="10"></canvas>
+          <div class="hint" id="hint">drop an image &middot; click to browse &middot; or paste with Ctrl+V</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel" id="readout">
+      <h2>Readout</h2>
+      <div class="verdict" id="verdict"><span class="dot"></span>
+        <span class="t">Waiting</span><span class="s">load an image</span></div>
+      <div class="body">
+        <p class="payload empty" id="payload">&mdash;</p>
+        <div class="payload-row">
+          <button id="copy">Copy payload</button>
+          <button id="copyreport">Copy report</button>
+          <span class="copied" id="copied" hidden>copied</span>
+        </div>
+        <dl class="facts" id="facts"></dl>
+        <div id="rswrap" hidden>
+          <h2 style="all:unset;display:block;font-family:var(--f-mono);font-size:10.5px;
+              letter-spacing:.09em;text-transform:uppercase;color:var(--ink-3);
+              margin:18px 0 7px">Reed&#8209;Solomon budget per block</h2>
+          <table class="rs">
+            <colgroup><col style="width:13%"><col style="width:12%"><col style="width:10%">
+              <col style="width:18%"><col style="width:14%"><col style="width:33%"></colgroup>
+            <thead><tr><th>Block</th><th>Data</th><th>EC</th>
+            <th>Erasures</th><th>Errors</th><th>Used</th></tr></thead>
+            <tbody id="rsbody"></tbody></table>
+        </div>
+        <div id="segwrap" hidden>
+          <h2 style="all:unset;display:block;font-family:var(--f-mono);font-size:10.5px;
+              letter-spacing:.09em;text-transform:uppercase;color:var(--ink-3);
+              margin:18px 0 7px">Encoded segments</h2>
+          <div class="seg" id="segs"></div>
+        </div>
+        <div class="notes" id="notes" hidden></div>
+      </div>
+    </section>
+  </div>
+
+  <div class="maps">
+    <section class="panel">
+      <h2>Module map</h2>
+      <div class="body">
+        <canvas id="map" width="10" height="10"></canvas>
+        <div class="legend">
+          <span><i class="sw" style="background:var(--mod-dark)"></i>dark</span>
+          <span><i class="sw" style="background:var(--mod-light)"></i>light</span>
+          <span><i class="sw" style="background:var(--marker);border-color:var(--marker)"></i>was obscured</span>
+        </div>
+      </div>
+    </section>
+    <section class="panel">
+      <h2>Repaired symbol</h2>
+      <div class="body">
+        <img id="out" alt="Repaired QR code, scannable">
+        <div class="legend"><span>right&#8209;click the image to save it, or scan it from the screen</span></div>
+      </div>
+    </section>
+  </div>
+
+  <footer class="foot">
+    <h3>How it works</h3>
+    <p>Everything a QR symbol needs to be located is fixed by ISO/IEC&nbsp;18004: three finder
+       patterns, their separators, the timing rows, the alignment patterns, and two copies of
+       the format information. Cover one corner and all of that is still recoverable from the
+       other two. The bench rebuilds those modules, then treats each painted&#8209;over data
+       module as an erasure of <em>known position</em>.</p>
+    <p>That distinction is the whole trick. A block carrying <code>n</code> error&#8209;correction
+       codewords repairs <code>n/2</code> codewords when it must find them first, but a full
+       <code>n</code> when it is told where they are. The budget column shows
+       <code>2&thinsp;&times;&thinsp;errors&nbsp;+&nbsp;erasures</code> against that limit; stay
+       inside it and the decode is unique, so no other message could have produced the symbol.</p>
+    <p>The bench also re&#8209;encodes its own answer and compares it against every module it
+       could actually see. A conflict there means the grid or the payload is wrong, and the
+       verdict drops to <em>probable</em> rather than quietly reporting a clean result.</p>
+  </footer>
+</div>
+
+<script>
+"use strict";
+/* ===================== GF(256) + Reed-Solomon with erasures ===================== */
+const EXP = new Uint8Array(512), LOG = new Uint8Array(256);
+(function(){ let x=1; for(let i=0;i<255;i++){ EXP[i]=x; LOG[x]=i; x<<=1; if(x&0x100) x^=0x11D; }
+  for(let i=255;i<512;i++) EXP[i]=EXP[i-255]; })();
+const gmul=(a,b)=> (a===0||b===0)?0:EXP[LOG[a]+LOG[b]];
+const gdiv=(a,b)=>{ if(b===0) throw new Error("div0"); return a===0?0:EXP[(LOG[a]-LOG[b]+255)%255]; };
+const gpow=(a,n)=>EXP[(((LOG[a]*n)%255)+255)%255];
+const ginv=a=>EXP[255-LOG[a]];
+const pscale=(p,x)=>p.map(c=>gmul(c,x));
+function padd(p,q){ const r=new Array(Math.max(p.length,q.length)).fill(0);
+  for(let i=0;i<p.length;i++) r[i+r.length-p.length]=p[i];
+  for(let i=0;i<q.length;i++) r[i+r.length-q.length]^=q[i]; return r; }
+function pmul(p,q){ const r=new Array(p.length+q.length-1).fill(0);
+  for(let j=0;j<q.length;j++){ if(!q[j]) continue;
+    for(let i=0;i<p.length;i++) r[i+j]^=gmul(p[i],q[j]); } return r; }
+function peval(p,x){ let y=0; for(let i=0;i<p.length;i++) y=gmul(y,x)^p[i]; return y; }
+function syndromes(msg,nsym){ const s=[0]; for(let i=0;i<nsym;i++) s.push(peval(msg,gpow(2,i))); return s; }
+function errataLocator(pos){ let l=[1]; for(const p of pos) l=pmul(l,padd([1],[gpow(2,p),0])); return l; }
+function correctErrata(msg,synd,pos){
+  const coef=pos.map(p=>msg.length-1-p);
+  const loc=errataLocator(coef);
+  const rev=synd.slice().reverse();
+  let ev=pmul(rev,loc); ev=ev.slice(ev.length-(loc.length)); ev.reverse();
+  const X=coef.map(c=>gpow(2,-(255-c)));
+  const E=new Array(msg.length).fill(0);
+  for(let i=0;i<X.length;i++){
+    const Xi=X[i], inv=ginv(Xi); let den=1;
+    for(let j=0;j<X.length;j++) if(j!==i) den=gmul(den,1^gmul(inv,X[j]));
+    if(den===0) throw new Error("degenerate errata locator");
+    let num=peval(ev.slice().reverse(),inv); num=gmul(gpow(Xi,1),num);
+    E[pos[i]]=gdiv(num,den);
+  }
+  return padd(msg,E);
+}
+function errorLocator(synd,nsym,eloc,ecount){
+  let el=eloc?eloc.slice():[1], old=eloc?eloc.slice():[1];
+  const shift=synd.length>nsym?synd.length-nsym:0;
+  for(let i=0;i<nsym-ecount;i++){
+    const K=eloc?(ecount+i+shift):(i+shift);
+    let d=synd[K];
+    for(let j=1;j<el.length;j++) d^=gmul(el[el.length-1-j],synd[K-j]);
+    old=old.concat([0]);
+    if(d!==0){
+      if(old.length>el.length){ const nl=pscale(old,d); old=pscale(el,ginv(d)); el=nl; }
+      el=padd(el,pscale(old,d));
+    }
+  }
+  while(el.length && el[0]===0) el.shift();
+  const errs=el.length-1;
+  if((errs-ecount)*2+ecount>nsym) throw new Error("too many errors to correct");
+  return el;
+}
+function findErrors(el,nmess){
+  const errs=el.length-1, pos=[];
+  for(let i=0;i<nmess;i++) if(peval(el,gpow(2,i))===0) pos.push(nmess-1-i);
+  if(pos.length!==errs) throw new Error("Chien search failed ("+pos.length+" roots for degree "+errs+")");
+  return pos;
+}
+function forneySynd(synd,pos,nmess){
+  const rev=pos.map(p=>nmess-1-p), f=synd.slice(1);
+  for(let i=0;i<pos.length;i++){ const x=gpow(2,rev[i]);
+    for(let j=0;j<f.length-1;j++) f[j]=gmul(f[j],x)^f[j+1]; }
+  return f;
+}
+function rsDecode(cw,nsym,erase){
+  const msg=cw.slice();
+  if(erase.length>nsym) throw new Error(erase.length+" erasures exceed the "+nsym+" correction codewords");
+  for(const p of erase) msg[p]=0;
+  let synd=syndromes(msg,nsym);
+  if(Math.max.apply(null,synd)===0) return {msg:msg,errpos:[]};
+  const fs=forneySynd(synd,erase,msg.length);
+  const el=errorLocator(fs,nsym,null,erase.length);
+  const ep=findErrors(el.slice().reverse(),msg.length);
+  const out=correctErrata(msg,synd,erase.concat(ep));
+  if(Math.max.apply(null,syndromes(out,nsym))>0) throw new Error("decoding did not converge");
+  return {msg:out,errpos:ep};
+}
+
+/* ===================== Standard tables ===================== */
+const ECC_TABLE={
+ 1:[[[1,26,19]],[[1,26,16]],[[1,26,13]],[[1,26,9]]],
+ 2:[[[1,44,34]],[[1,44,28]],[[1,44,22]],[[1,44,16]]],
+ 3:[[[1,70,55]],[[1,70,44]],[[2,35,17]],[[2,35,13]]],
+ 4:[[[1,100,80]],[[2,50,32]],[[2,50,24]],[[4,25,9]]],
+ 5:[[[1,134,108]],[[2,67,43]],[[2,33,15],[2,34,16]],[[2,33,11],[2,34,12]]],
+ 6:[[[2,86,68]],[[4,43,27]],[[4,43,19]],[[4,43,15]]],
+ 7:[[[2,98,78]],[[4,49,31]],[[2,32,14],[4,33,15]],[[4,39,13],[1,40,14]]],
+ 8:[[[2,121,97]],[[2,60,38],[2,61,39]],[[4,40,18],[2,41,19]],[[4,40,14],[2,41,15]]],
+ 9:[[[2,146,116]],[[3,58,36],[2,59,37]],[[4,36,16],[4,37,17]],[[4,36,12],[4,37,13]]],
+ 10:[[[2,86,68],[2,87,69]],[[4,69,43],[1,70,44]],[[6,43,19],[2,44,20]],[[6,43,15],[2,44,16]]],
+ 11:[[[4,101,81]],[[1,80,50],[4,81,51]],[[4,50,22],[4,51,23]],[[3,36,12],[8,37,13]]],
+ 12:[[[2,116,92],[2,117,93]],[[6,58,36],[2,59,37]],[[4,46,20],[6,47,21]],[[7,42,14],[4,43,15]]],
+ 13:[[[4,133,107]],[[8,59,37],[1,60,38]],[[8,44,20],[4,45,21]],[[12,33,11],[4,34,12]]],
+ 14:[[[3,145,115],[1,146,116]],[[4,64,40],[5,65,41]],[[11,36,16],[5,37,17]],[[11,36,12],[5,37,13]]],
+ 15:[[[5,109,87],[1,110,88]],[[5,65,41],[5,66,42]],[[5,54,24],[7,55,25]],[[11,36,12],[7,37,13]]],
+ 16:[[[5,122,98],[1,123,99]],[[7,73,45],[3,74,46]],[[15,43,19],[2,44,20]],[[3,45,15],[13,46,16]]],
+ 17:[[[1,135,107],[5,136,108]],[[10,74,46],[1,75,47]],[[1,50,22],[15,51,23]],[[2,42,14],[17,43,15]]],
+ 18:[[[5,150,120],[1,151,121]],[[9,69,43],[4,70,44]],[[17,50,22],[1,51,23]],[[2,42,14],[19,43,15]]],
+ 19:[[[3,141,113],[4,142,114]],[[3,70,44],[11,71,45]],[[17,47,21],[4,48,22]],[[9,39,13],[16,40,14]]],
+ 20:[[[3,135,107],[5,136,108]],[[3,67,41],[13,68,42]],[[15,54,24],[5,55,25]],[[15,43,15],[10,44,16]]],
+ 21:[[[4,144,116],[4,145,117]],[[17,68,42]],[[17,50,22],[6,51,23]],[[19,46,16],[6,47,17]]],
+ 22:[[[2,139,111],[7,140,112]],[[17,74,46]],[[7,54,24],[16,55,25]],[[34,37,13]]],
+ 23:[[[4,151,121],[5,152,122]],[[4,75,47],[14,76,48]],[[11,54,24],[14,55,25]],[[16,45,15],[14,46,16]]],
+ 24:[[[6,147,117],[4,148,118]],[[6,73,45],[14,74,46]],[[11,54,24],[16,55,25]],[[30,46,16],[2,47,17]]],
+ 25:[[[8,132,106],[4,133,107]],[[8,75,47],[13,76,48]],[[7,54,24],[22,55,25]],[[22,45,15],[13,46,16]]],
+ 26:[[[10,142,114],[2,143,115]],[[19,74,46],[4,75,47]],[[28,50,22],[6,51,23]],[[33,46,16],[4,47,17]]],
+ 27:[[[8,152,122],[4,153,123]],[[22,73,45],[3,74,46]],[[8,53,23],[26,54,24]],[[12,45,15],[28,46,16]]],
+ 28:[[[3,147,117],[10,148,118]],[[3,73,45],[23,74,46]],[[4,54,24],[31,55,25]],[[11,45,15],[31,46,16]]],
+ 29:[[[7,146,116],[7,147,117]],[[21,73,45],[7,74,46]],[[1,53,23],[37,54,24]],[[19,45,15],[26,46,16]]],
+ 30:[[[5,145,115],[10,146,116]],[[19,75,47],[10,76,48]],[[15,54,24],[25,55,25]],[[23,45,15],[25,46,16]]],
+ 31:[[[13,145,115],[3,146,116]],[[2,74,46],[29,75,47]],[[42,54,24],[1,55,25]],[[23,45,15],[28,46,16]]],
+ 32:[[[17,145,115]],[[10,74,46],[23,75,47]],[[10,54,24],[35,55,25]],[[19,45,15],[35,46,16]]],
+ 33:[[[17,145,115],[1,146,116]],[[14,74,46],[21,75,47]],[[29,54,24],[19,55,25]],[[11,45,15],[46,46,16]]],
+ 34:[[[13,145,115],[6,146,116]],[[14,74,46],[23,75,47]],[[44,54,24],[7,55,25]],[[59,46,16],[1,47,17]]],
+ 35:[[[12,151,121],[7,152,122]],[[12,75,47],[26,76,48]],[[39,54,24],[14,55,25]],[[22,45,15],[41,46,16]]],
+ 36:[[[6,151,121],[14,152,122]],[[6,75,47],[34,76,48]],[[46,54,24],[10,55,25]],[[2,45,15],[64,46,16]]],
+ 37:[[[17,152,122],[4,153,123]],[[29,74,46],[14,75,47]],[[49,54,24],[10,55,25]],[[24,45,15],[46,46,16]]],
+ 38:[[[4,152,122],[18,153,123]],[[13,74,46],[32,75,47]],[[48,54,24],[14,55,25]],[[42,45,15],[32,46,16]]],
+ 39:[[[20,147,117],[4,148,118]],[[40,75,47],[7,76,48]],[[43,54,24],[22,55,25]],[[10,45,15],[67,46,16]]],
+ 40:[[[19,148,118],[6,149,119]],[[18,75,47],[31,76,48]],[[34,54,24],[34,55,25]],[[20,45,15],[61,46,16]]]
+};
+const ALIGN={2:[6,18],3:[6,22],4:[6,26],5:[6,30],6:[6,34],7:[6,22,38],8:[6,24,42],9:[6,26,46],
+ 10:[6,28,50],11:[6,30,54],12:[6,32,58],13:[6,34,62],14:[6,26,46,66],15:[6,26,48,70],
+ 16:[6,26,50,74],17:[6,30,54,78],18:[6,30,56,82],19:[6,30,58,86],20:[6,34,62,90],
+ 21:[6,28,50,72,94],22:[6,26,50,74,98],23:[6,30,54,78,102],24:[6,28,54,80,106],
+ 25:[6,32,58,84,110],26:[6,30,58,86,114],27:[6,34,62,90,118],28:[6,26,50,74,98,122],
+ 29:[6,30,54,78,102,126],30:[6,26,52,78,104,130],31:[6,30,56,82,108,134],
+ 32:[6,34,60,86,112,138],33:[6,30,58,86,114,142],34:[6,34,62,90,118,146],
+ 35:[6,30,54,78,102,126,150],36:[6,24,50,76,102,128,154],37:[6,28,54,80,106,132,158],
+ 38:[6,32,58,84,110,136,162],39:[6,26,54,82,110,138,166],40:[6,30,58,86,114,142,170]};
+const ECL_NAME={1:"L",0:"M",3:"Q",2:"H"}, ECL_IDX={1:0,0:1,3:2,2:3};
+const FINDER=["1111111","1000001","1011101","1011101","1011101","1000001","1111111"];
+const MASKF=[(r,c)=>(r+c)%2===0,(r,c)=>r%2===0,(r,c)=>c%3===0,(r,c)=>(r+c)%3===0,
+  (r,c)=>(Math.floor(r/2)+Math.floor(c/3))%2===0,(r,c)=>((r*c)%2+(r*c)%3)===0,
+  (r,c)=>(((r*c)%2+(r*c)%3)%2)===0,(r,c)=>(((r+c)%2+(r*c)%3)%2)===0];
+const ALNUM="0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:";
+const UNK=-1;
+
+const VALID_FORMATS=(function(){ const m={}, g=0b10100110111;
+  for(let e=0;e<4;e++) for(let k=0;k<8;k++){ const d=(e<<3)|k; let t=d<<10;
+    while(bitlen(t)-1>=10) t^=g<<(bitlen(t)-11);
+    m[((d<<10)|t)^0b101010000010010]=[e,k]; }
+  return m; })();
+const VALID_VERSIONS=(function(){ const m={}, g=0b1111100100101;
+  for(let v=7;v<=40;v++){ let t=v<<12; while(bitlen(t)-1>=12) t^=g<<(bitlen(t)-13);
+    m[v]=(v<<12)|t; } return m; })();
+function bitlen(x){ let n=0; while(x){ n++; x>>>=1; } return n; }
+
+/* ===================== image analysis ===================== */
+function integral(mask,w,h){
+  const ii=new Int32Array((w+1)*(h+1));
+  for(let y=0;y<h;y++){ let row=0;
+    for(let x=0;x<w;x++){ row+=mask[y*w+x]; ii[(y+1)*(w+1)+x+1]=ii[y*(w+1)+x+1]+row; } }
+  return ii;
+}
+function boxSum(ii,w,x0,y0,x1,y1){ const W=w+1;
+  return ii[y1*W+x1]-ii[y0*W+x1]-ii[y1*W+x0]+ii[y0*W+x0]; }
+function otsu(hist,total){
+  if(!total) return 128;
+  let sAll=0; for(let i=0;i<256;i++) sAll+=i*hist[i];
+  let wB=0,sB=0,best=-1,thr=128;
+  for(let t=0;t<256;t++){ wB+=hist[t]; if(!wB) continue; const wF=total-wB; if(!wF) break;
+    sB+=t*hist[t]; const mB=sB/wB, mF=(sAll-sB)/wF, v=wB*wF*(mB-mF)*(mB-mF);
+    if(v>best){ best=v; thr=t; } }
+  return thr;
+}
+function majority(mask,w,h,r){
+  if(r<1) return mask;
+  const ii=integral(mask,w,h), out=new Uint8Array(w*h);
+  for(let y=0;y<h;y++){ const y0=Math.max(0,y-r), y1=Math.min(h,y+r+1);
+    for(let x=0;x<w;x++){ const x0=Math.max(0,x-r), x1=Math.min(w,x+r+1);
+      out[y*w+x]=(boxSum(ii,w,x0,y0,x1,y1)*2>=(y1-y0)*(x1-x0))?1:0; } }
+  return out;
+}
+function classify(px,w,h,opt){
+  const n=w*h, occ=new Uint8Array(n), luma=new Float32Array(n);
+  for(let i=0;i<n;i++){
+    const R=px[i*4],G=px[i*4+1],B=px[i*4+2];
+    luma[i]=0.299*R+0.587*G+0.114*B;
+    if(opt.mode==="none") continue;
+    if(opt.mode==="pick"&&opt.rgb){
+      const d=(R-opt.rgb[0])**2+(G-opt.rgb[1])**2+(B-opt.rgb[2])**2;
+      if(d<=opt.tol*opt.tol) occ[i]=1;
+    }else if(opt.mode==="auto"){
+      const mx=Math.max(R,G,B), mn=Math.min(R,G,B);
+      if(mx>=60 && (mx-mn)/Math.max(mx,1)>=0.33) occ[i]=1;
+    }
+  }
+  const occl=majority(occ,w,h,opt.smooth);
+  const hist=new Int32Array(256); let tot=0;
+  for(let i=0;i<n;i++) if(!occl[i]){ hist[Math.min(255,Math.max(0,luma[i]|0))]++; tot++; }
+  const thr=otsu(hist,tot);
+  const dark=new Uint8Array(n), light=new Uint8Array(n);
+  for(let i=0;i<n;i++){ if(occl[i]) continue;
+    if(luma[i]<=thr) dark[i]=1; else light[i]=1; }
+  return {dark:dark,light:light,occl:occl,thr:thr};
+}
+function rowRuns(mask,w,y){
+  const out=[]; let cur=mask[y*w], start=0;
+  for(let x=1;x<w;x++){ const v=mask[y*w+x];
+    if(v!==cur){ out.push([cur,start,x-start]); cur=v; start=x; } }
+  out.push([cur,start,w-start]); return out;
+}
+function templateOk(dark,occl,w,h,cx,cy,m){
+  const half=Math.max(1,Math.round(m*0.25));
+  for(let i=-4;i<=4;i++) for(let j=-4;j<=4;j++){
+    const y=Math.round(cy+i*m), x=Math.round(cx+j*m), outer=Math.max(Math.abs(i),Math.abs(j))===4;
+    const y0=Math.max(0,y-half), y1=Math.min(h,y+half+1);
+    const x0=Math.max(0,x-half), x1=Math.min(w,x+half+1);
+    if(y1<=y0||x1<=x0){ if(outer) continue; return false; }
+    let d=0,o=0,cnt=0;
+    for(let yy=y0;yy<y1;yy++) for(let xx=x0;xx<x1;xx++){ d+=dark[yy*w+xx]; o+=occl[yy*w+xx]; cnt++; }
+    if(o/cnt>0.5) return false;
+    const want=outer?0:(FINDER[i+3][j+3]==="1"?1:0);
+    if(((d/cnt>=0.5)?1:0)!==want) return false;
+  }
+  return true;
+}
+function verifyVertical(dark,w,h,x,y,m){
+  if(x<0||x>=w||!dark[y*w+x]) return false;
+  let up=y; while(up>0&&dark[(up-1)*w+x]) up--;
+  let dn=y; while(dn<h-1&&dark[(dn+1)*w+x]) dn++;
+  if(Math.abs((dn-up+1)-3*m)>m*1.2) return false;
+  let n=0,u=up-1; while(u>=0&&!dark[u*w+x]){ u--; n++; }
+  if(Math.abs(n-m)>m*0.8) return false;
+  n=0; let d=dn+1; while(d<h&&!dark[d*w+x]){ d++; n++; }
+  return Math.abs(n-m)<=m*0.8;
+}
+function findFinders(dark,occl,w,h){
+  const cands=[], step=Math.max(1,Math.floor(h/400));
+  for(let y=0;y<h;y+=step){
+    const rr=rowRuns(dark,w,y);
+    for(let i=0;i+4<rr.length;i++){
+      const s=rr.slice(i,i+5);
+      if(!(s[0][0]&&!s[1][0]&&s[2][0]&&!s[3][0]&&s[4][0])) continue;
+      const L=s.map(z=>z[2]), m=(L[0]+L[1]+L[2]+L[3]+L[4])/7;
+      if(m<1.5) continue;
+      if(!(Math.abs(L[0]-m)<=m*.6&&Math.abs(L[1]-m)<=m*.6&&Math.abs(L[2]-3*m)<=m*.9
+           &&Math.abs(L[3]-m)<=m*.6&&Math.abs(L[4]-m)<=m*.6)) continue;
+      const cx=s[2][1]+s[2][2]/2;
+      if(verifyVertical(dark,w,h,Math.round(cx),y,m)) cands.push([cx,y,m]);
+    }
+  }
+  const groups=[];
+  for(const c of cands){ let put=false;
+    for(const g of groups){ if(Math.abs(g[0][0]-c[0])<c[2]*2&&Math.abs(g[0][1]-c[1])<c[2]*4){ g.push(c); put=true; break; } }
+    if(!put) groups.push([c]); }
+  let out=[];
+  for(const g of groups){ if(g.length<2) continue;
+    const xs=g.map(p=>p[0]).sort((a,b)=>a-b), ys=g.map(p=>p[1]), ms=g.map(p=>p[2]).sort((a,b)=>a-b);
+    out.push([xs[xs.length>>1],(Math.min.apply(null,ys)+Math.max.apply(null,ys))/2,
+              ms[ms.length>>1],g.length]); }
+  if(!out.length) return [];
+  const strict=out.filter(o=>templateOk(dark,occl,w,h,o[0],o[1],o[2]));
+  out=strict.length?strict:out;
+  const sorted=out.map(o=>o[2]).sort((a,b)=>a-b), med=sorted[sorted.length>>1];
+  const filt=out.filter(o=>Math.abs(o[2]-med)<=0.25*med);
+  out=filt.length?filt:out;
+  out.sort((a,b)=>b[3]-a[3]);
+  return out.slice(0,3).map(o=>[o[0],o[1],o[2]]);
+}
+function locateSymbol(dark,w,h,fs,forcedN){
+  const ms=fs.map(f=>f[2]).sort((a,b)=>a-b), m=ms[ms.length>>1];
+  let left=Math.min.apply(null,fs.map(f=>f[0]))-3.5*m;
+  let right=Math.max.apply(null,fs.map(f=>f[0]))+3.5*m;
+  let top=Math.min.apply(null,fs.map(f=>f[1]))-3.5*m;
+  let bottom=Math.max.apply(null,fs.map(f=>f[1]))+3.5*m;
+  if(fs.length<2){
+    let x0=w,x1=0,y0=h,y1=0,any=false;
+    for(let y=0;y<h;y++) for(let x=0;x<w;x++) if(dark[y*w+x]){
+      any=true; if(x<x0)x0=x; if(x>x1)x1=x; if(y<y0)y0=y; if(y>y1)y1=y; }
+    if(any){ left=Math.min(left,x0); right=Math.max(right,x1+1);
+             top=Math.min(top,y0); bottom=Math.max(bottom,y1+1); }
+  }
+  const size=Math.max(right-left,bottom-top);
+  let n=forcedN;
+  if(!n){ let best=1e9; for(let v=1;v<=40;v++){ const d=Math.abs(size/m-(17+4*v));
+    if(d<best){ best=d; n=17+4*v; } } }
+  return {x0:left,y0:top,module:size/n,n:n,finders:fs};
+}
+function sampleGrid(masks,w,h,geo){
+  const n=geo.n, m=geo.module;
+  const iiD=integral(masks.dark,w,h), iiL=integral(masks.light,w,h), iiO=integral(masks.occl,w,h);
+  const out=new Int8Array(n*n);
+  for(let r=0;r<n;r++){
+    let ya=Math.round(geo.y0+(r+0.28)*m), yb=Math.round(geo.y0+(r+0.72)*m);
+    ya=Math.min(Math.max(0,ya),h-1); yb=Math.min(Math.max(ya+1,yb),h);
+    for(let c=0;c<n;c++){
+      let xa=Math.round(geo.x0+(c+0.28)*m), xb=Math.round(geo.x0+(c+0.72)*m);
+      xa=Math.min(Math.max(0,xa),w-1); xb=Math.min(Math.max(xa+1,xb),w);
+      const area=(yb-ya)*(xb-xa);
+      const d=boxSum(iiD,w,xa,ya,xb,yb)/area, l=boxSum(iiL,w,xa,ya,xb,yb)/area,
+            o=boxSum(iiO,w,xa,ya,xb,yb)/area;
+      out[r*n+c]= o>=0.5 ? UNK : (d>=l?1:0);
+    }
+  }
+  return out;
+}
+
+/* ===================== symbol structure ===================== */
+function alignCentres(version,n){
+  if(version<2) return [];
+  const p=ALIGN[version], out=[];
+  for(const r of p) for(const c of p){
+    if((r<9&&c<9)||(r<9&&c>n-10)||(r>n-10&&c<9)) continue;
+    out.push([r,c]); }
+  return out;
+}
+function expectedFixed(n,version){
+  const e=new Int8Array(n*n).fill(-2);
+  const put=(r,c,v)=>{ e[r*n+c]=v; };
+  for(const [r0,c0] of [[0,0],[0,n-7],[n-7,0]])
+    for(let i=0;i<7;i++) for(let j=0;j<7;j++) put(r0+i,c0+j,FINDER[i][j]==="1"?1:0);
+  for(let i=0;i<8;i++){ put(7,i,0); put(i,7,0); put(7,n-1-i,0); put(i,n-8,0);
+    put(n-8,i,0); put(n-1-i,7,0); }
+  for(let i=8;i<n-8;i++){ put(6,i,i%2===0?1:0); put(i,6,i%2===0?1:0); }
+  put(n-8,8,1);
+  for(const [ar,ac] of alignCentres(version,n))
+    for(let i=-2;i<=2;i++) for(let j=-2;j<=2;j++)
+      put(ar+i,ac+j,Math.max(Math.abs(i),Math.abs(j))===1?0:1);
+  return e;
+}
+function functionMap(n,version){
+  const f=new Uint8Array(n*n);
+  for(let r=0;r<n;r++) for(let c=0;c<n;c++){
+    if((r<9&&c<9)||(r<9&&c>=n-8)||(r>=n-8&&c<9)) f[r*n+c]=1;
+    if(r===6||c===6) f[r*n+c]=1; }
+  for(const [ar,ac] of alignCentres(version,n))
+    for(let i=-2;i<=2;i++) for(let j=-2;j<=2;j++) f[(ar+i)*n+ac+j]=1;
+  if(version>=7) for(let i=0;i<6;i++) for(let j=0;j<3;j++){
+    f[i*n+(n-11+j)]=1; f[(n-11+j)*n+i]=1; }
+  return f;
+}
+function moduleOrder(n,version){
+  const f=functionMap(n,version), order=[]; let col=n-1, up=true;
+  while(col>0){
+    if(col===6) col--;
+    for(let k=0;k<n;k++){ const r=up?n-1-k:k;
+      for(const c of [col,col-1]) if(!f[r*n+c]) order.push([r,c]); }
+    up=!up; col-=2;
+  }
+  return order;
+}
+function formatPositions(n){
+  const c1=[]; for(let i=0;i<6;i++) c1.push([8,i]);
+  c1.push([8,7],[8,8],[7,8]); for(let i=0;i<6;i++) c1.push([5-i,8]);
+  const c2=[]; for(let i=0;i<7;i++) c2.push([n-1-i,8]);
+  for(let i=0;i<8;i++) c2.push([8,n-8+i]);
+  return [c1,c2];
+}
+function readFormat(mat,n){
+  const [c1,c2]=formatPositions(n);
+  const obs=[c1,c2].map(pos=>pos.map(p=>mat[p[0]*n+p[1]]));
+  const scores=[];
+  for(const key in VALID_FORMATS){
+    const val=+key, [ecl,mask]=VALID_FORMATS[key];
+    let d=0;
+    for(const o of obs) for(let i=0;i<15;i++){
+      const b=(val>>(14-i))&1;
+      if(o[i]!==UNK && o[i]!==b) d++; }
+    scores.push([d,val,ecl,mask]);
+  }
+  scores.sort((a,b)=>a[0]-b[0]);
+  return {ecl:scores[0][2],mask:scores[0][3],dist:scores[0][0],
+          margin:scores[1][0]-scores[0][0],val:scores[0][1]};
+}
+function rot(mat,n){ const o=new Int8Array(n*n);
+  for(let r=0;r<n;r++) for(let c=0;c<n;c++) o[r*n+c]=mat[(n-1-c)*n+r]; return o; }
+function mirror(mat,n){ const o=new Int8Array(n*n);
+  for(let r=0;r<n;r++) for(let c=0;c<n;c++) o[r*n+c]=mat[r*n+(n-1-c)]; return o; }
+function scoreMatrix(mat,n,version){
+  const e=expectedFixed(n,version);
+  let hits=0,miss=0;
+  for(let i=0;i<n*n;i++){ if(e[i]===-2||mat[i]===UNK) continue;
+    if(mat[i]===e[i]) hits++; else miss++; }
+  const f=readFormat(mat,n);
+  return {score:(hits-3*miss-2*f.dist)/Math.max(1,hits+miss),hits:hits,miss:miss,dist:f.dist};
+}
+function orient(mat,n,version){
+  let best=null;
+  for(let mir=0;mir<2;mir++){
+    let m=mir?mirror(mat,n):mat;
+    for(let r=0;r<4;r++){
+      const s=scoreMatrix(m,n,version);
+      if(!best||s.score>best.score) best={score:s.score,mat:m,rot:r,mir:!!mir,
+        hits:s.hits,miss:s.miss,dist:s.dist};
+      m=rot(m,n);
+    }
+  }
+  return best;
+}
+function chooseGrid(masks,w,h,geo,forcedVersion){
+  const span=geo.module*geo.n, raw=span/geo.module;
+  let cands;
+  if(forcedVersion) cands=[forcedVersion];
+  else cands=[...Array(40).keys()].map(i=>i+1)
+        .sort((a,b)=>Math.abs(raw-(17+4*a))-Math.abs(raw-(17+4*b))).slice(0,4);
+  let best=null;
+  for(const v of cands){
+    const n=17+4*v;
+    const g={x0:geo.x0,y0:geo.y0,module:span/n,n:n,finders:geo.finders};
+    const mat=sampleGrid(masks,w,h,g);
+    const o=orient(mat,n,v);
+    if(!best||o.score>best.o.score) best={v:v,g:g,mat:o.mat,o:o};
+  }
+  if(!best||best.o.score<0.2)
+    throw new Error("Could not lock onto the module grid (best fit "+
+      (best?best.o.score.toFixed(2):"n/a")+"). Try a tighter crop, a different redaction "+
+      "setting, or pin the version.");
+  return best;
+}
+
+/* ===================== decode ===================== */
+function decodeSymbol(known,n,version){
+  const raw=known.slice();
+  const f=readFormat(known,n);
+  const ecl=ECL_NAME[f.ecl], notes=[];
+  if(f.margin===0) notes.push("Format information is ambiguous - more than one "+
+    "(error level, mask) pair fits the surviving bits equally well.");
+  if(f.dist) notes.push("Format information needed "+f.dist+" bit correction"+(f.dist>1?"s":"")+".");
+
+  for(const pos of formatPositions(n))
+    pos.forEach((p,i)=>{ known[p[0]*n+p[1]]=(f.val>>(14-i))&1; });
+  const exp=expectedFixed(n,version);
+  for(let i=0;i<n*n;i++) if(exp[i]!==-2) known[i]=exp[i];
+  if(version>=7){ const vv=VALID_VERSIONS[version];
+    for(let i=0;i<6;i++) for(let j=0;j<3;j++){ const b=(vv>>(i*3+j))&1;
+      known[i*n+(n-11+j)]=b; known[(n-11+j)*n+i]=b; } }
+
+  const order=moduleOrder(n,version), mf=MASKF[f.mask];
+  const bits=[], erasedBits=[];
+  order.forEach(([r,c],i)=>{ const v=known[r*n+c];
+    if(v===UNK){ bits.push(0); erasedBits.push(i); }
+    else bits.push(v^(mf(r,c)?1:0)); });
+
+  const groups=ECC_TABLE[version][ECL_IDX[f.ecl]];
+  let total=0; for(const g of groups) total+=g[0]*g[1];
+  if(Math.floor(bits.length/8)<total)
+    throw new Error("The grid does not hold enough codewords - the version or geometry is wrong.");
+  const stream=[];
+  for(let i=0;i<total;i++){ let b=0; for(let k=0;k<8;k++) b=(b<<1)|bits[i*8+k]; stream.push(b); }
+  const erasedSet=new Set(erasedBits.map(i=>Math.floor(i/8)).filter(i=>i<total));
+
+  const dLen=[],eLen=[];
+  for(const [nb,tot,dat] of groups) for(let k=0;k<nb;k++){ dLen.push(dat); eLen.push(tot-dat); }
+  const nb=dLen.length;
+  const dBlk=[],eBlk=[],dMap=[],eMap=[];
+  for(let b=0;b<nb;b++){ dBlk.push([]); eBlk.push([]); dMap.push([]); eMap.push([]); }
+  let idx=0;
+  for(let k=0;k<Math.max.apply(null,dLen);k++) for(let b=0;b<nb;b++)
+    if(k<dLen[b]){ dBlk[b].push(stream[idx]); dMap[b].push(idx); idx++; }
+  for(let k=0;k<Math.max.apply(null,eLen);k++) for(let b=0;b<nb;b++)
+    if(k<eLen[b]){ eBlk[b].push(stream[idx]); eMap[b].push(idx); idx++; }
+
+  let certain=true; const binfo=[], fixed=[];
+  for(let b=0;b<nb;b++){
+    const cw=dBlk[b].concat(eBlk[b]), pos=dMap[b].concat(eMap[b]);
+    const er=[]; pos.forEach((p,i)=>{ if(erasedSet.has(p)) er.push(i); });
+    const nsym=eLen[b];
+    let res;
+    try{ res=rsDecode(cw,nsym,er); }
+    catch(e){ throw new Error("Block "+(b+1)+" could not be corrected: "+e.message+
+      ". Too much of the symbol is destroyed."); }
+    pos.forEach((p,i)=>{ stream[p]=res.msg[i]; });
+    fixed.push(res.msg.slice(0,dLen[b]));
+    const ok=2*res.errpos.length+er.length<=nsym;
+    certain=certain&&ok;
+    binfo.push({block:b+1,data:dLen[b],ec:nsym,erasures:er.length,errors:res.errpos.length,
+                used:2*res.errpos.length+er.length,capacity:nsym,ok:ok});
+  }
+  const data=[].concat.apply([],fixed);
+  const parsed=parseSegments(data,version);
+
+  const matrix=known.slice();
+  let allbits="";
+  for(const b of stream) allbits+=b.toString(2).padStart(8,"0");
+  order.forEach(([r,c],i)=>{ const b=i<allbits.length?+allbits[i]:0;
+    matrix[r*n+c]=b^(mf(r,c)?1:0); });
+
+  let mismatch=0, firstMM=null;
+  for(let i=0;i<n*n;i++) if(raw[i]!==UNK&&raw[i]!==matrix[i]){
+    mismatch++; if(!firstMM) firstMM=[Math.floor(i/n),i%n]; }
+  if(mismatch){ certain=false;
+    notes.push(mismatch+" visible module"+(mismatch>1?"s":"")+" disagree with the "+
+      "reconstruction (first at row "+firstMM[0]+", column "+firstMM[1]+
+      "). The sampling grid or the payload is wrong."); }
+
+  return {version:version,ecl:ecl,mask:f.mask,text:parsed.text,segments:parsed.segs,
+          blocks:binfo,certain:certain,notes:notes,matrix:matrix,raw:raw,n:n,
+          obscured:countUnk(raw),erasedData:erasedBits.length,mismatch:mismatch};
+}
+function countUnk(m){ let k=0; for(let i=0;i<m.length;i++) if(m[i]===UNK) k++; return k; }
+
+function parseSegments(data,version){
+  let bs=""; for(const b of data) bs+=b.toString(2).padStart(8,"0");
+  let p=0, out="", enc="iso-8859-1"; const segs=[];
+  const cntBits=(mode)=> version<=9?({1:10,2:9,4:8,8:8})[mode]
+    : version<=26?({1:12,2:11,4:16,8:10})[mode] : ({1:14,2:13,4:16,8:12})[mode];
+  const num=(s)=>parseInt(s,2);
+  while(p+4<=bs.length){
+    const mode=num(bs.substr(p,4)); p+=4;
+    if(mode===0){ segs.push(["TERMINATOR",null,""]); break; }
+    if(mode===7){ const b0=num(bs.substr(p,8)); let eci;
+      if(b0>>7===0){ eci=b0&0x7F; p+=8; }
+      else if(b0>>6===2){ eci=num(bs.substr(p,16))&0x3FFF; p+=16; }
+      else { eci=num(bs.substr(p,24))&0x1FFFFF; p+=24; }
+      enc=({3:"iso-8859-1",20:"shift-jis",26:"utf-8",27:"ascii",28:"big5",
+            29:"gb18030",30:"euc-kr"})[eci]||enc;
+      segs.push(["ECI",eci,enc]); continue; }
+    if(mode===5||mode===9){ segs.push(["FNC1",mode,""]); if(mode===9) p+=8; continue; }
+    if(mode===3){ segs.push(["STRUCTURED APPEND",null,bs.substr(p,20)]); p+=20; continue; }
+    if(![1,2,4,8].includes(mode)){ segs.push(["UNKNOWN MODE",mode,""]); break; }
+    const nb=cntBits(mode), cnt=num(bs.substr(p,nb)); p+=nb;
+    if(mode===1){ let s="",i=0;
+      while(i<cnt){ const k=Math.min(3,cnt-i), w={1:4,2:7,3:10}[k];
+        s+=String(num(bs.substr(p,w))).padStart(k,"0"); p+=w; i+=k; }
+      segs.push(["NUMERIC",cnt,s]); out+=s; }
+    else if(mode===2){ let s="",i=0;
+      while(i+1<cnt){ const v=num(bs.substr(p,11)); p+=11;
+        s+=ALNUM[Math.floor(v/45)]+ALNUM[v%45]; i+=2; }
+      if(i<cnt){ s+=ALNUM[num(bs.substr(p,6))]; p+=6; }
+      segs.push(["ALPHANUMERIC",cnt,s]); out+=s; }
+    else if(mode===4){ const by=new Uint8Array(cnt);
+      for(let i=0;i<cnt;i++) by[i]=num(bs.substr(p+8*i,8));
+      p+=8*cnt;
+      let s; try{ s=new TextDecoder(enc,{fatal:false}).decode(by); }
+      catch(e){ s=Array.from(by).map(b=>String.fromCharCode(b)).join(""); }
+      segs.push(["BYTE",cnt,s]); out+=s; }
+    else { let s="";
+      for(let i=0;i<cnt;i++){ let v=num(bs.substr(p,13)); p+=13;
+        v=Math.floor(v/0xC0)*256+v%0xC0; v+= v<0x1F00?0x8140:0xC140;
+        try{ s+=new TextDecoder("shift-jis").decode(new Uint8Array([v>>8,v&0xFF])); }
+        catch(e){ s+="?"; } }
+      segs.push(["KANJI",cnt,s]); out+=s; }
+  }
+  return {text:out,segs:segs};
+}
+
+/* ===================== pipeline + UI ===================== */
+const $=id=>document.getElementById(id);
+const SAMPLE="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAN4AAADeCAIAAADdBSngAAAD5ElEQVR42u3dXW7UMBQGUEK7m+5xkLpHuptqeEUECetyf5z0nEfUDkz4ZOuLHed4Pp/fYD/fXQJEE0QT0QTRRDRBNEE0EU0QTUQTRBNEE9EE0UQ0QTQRTRBNEE1EE0QT0YQZr1kf9Pb++WUv4sePyGU8nwBwHMfg52TJOtnAqIkJHUQT0QTRREPn//v4bu277jzAursBRk1M6CCaiCaIJho6v/v5ePnzjx6RthvryOf+m9W1d2v6Rk1M6CCaiCaIJhq6S/CPPt7Yf1cacV1nN2qCaCKaIJqIJmjo+/TxWP/N+q26pm/UBNFENEE0QTTR0Hfu4ytW2ndWH+88823/lXejJqIJoologmiiod/DX85ze0R2jMdWulf6b2wHe6yzX3Et3qiJaIJoIpogmmjoV7Rynlus/+7/Myvd36gJoologmiCaKKhV1hZH4/11ro19Cs+dR7bmW/UxIQOogmiiWjCXRv6uY9nnd5W92x451PndefGz67FGzUxoYNoIpogmmjos2L71bM6adZbwmfvD6x8Tlb3t4aOCR1EE0QT0YR7NPSs89xW2mXsVPa63emxbpvVtbP2/Ne9n92oiQkdRBPRBNFEQ2/t4yFZq8+dK+Z136Lu+fqs+wNGTUzoIJqIJogmzDb0lT7euY6c9Tmde+w734ee9RS8NXRM6CCaIJqIJoQcdauidW8c62ygnXcMsq5h3fXJWtM3amJCB9FENEE04SRtDT2r/3Y+dT57n6HuzeZZq/POcgfRRDRBNBFNuGJD7zxVrG5lOaulZt1n6OzInbsOjJqY0EE0EU0QTahr6Fltt26vdd3ZaFntu7PFd553Z9TEhA6iiWiCaMKCtOfQ694AntXiY98iq+123me44tvPjZqY0EE0EU0QTTT02WeNs3piZyOu+9tjjXj2roJRExM6iCaIJqIJ+zf0uqeq92/NnXceOjnLHUQT0QTRRDThig19+IuVndU2u1d//9P2NHRM6CCaIJqIJsw29NnV3s5GXNdS6/ar79a+jZqY0EE0EU0QTTgpPMu9c//8ys9k/Xvq7gbM9ujO98oZNTGhg2gimiCa0NnQY721rm/WrSzX/VbsLfOd/4N192GMmpjQQTQRTRBNNPR7mH1zWdbndO57n/1koyYmdBBNRBNEEw39K3/52VPZO0+Bi/3W7CmCRk1M6CCaiCaIJhr6bo24zuz74GLXZ+WT696ibpc7iCaiCaKJaMIVG/pup7t3vkW9riN3Xh+jJogmogmiiWhCo9u+Dx2jJogmogmiCaKJaIJoIpogmiCaiCaIJqIJoologmiCaCKaIJqIJogmiCaiCSG/ANG1OD69RJvzAAAAAElFTkSuQmCC";
+let curImage=null, curName="sample", pickRGB=null, lastResult=null, lastGeo=null;
+
+for(let v=1;v<=40;v++){ const o=document.createElement("option");
+  o.value=v; o.textContent="Version "+v+"  ("+(17+4*v)+"×"+(17+4*v)+")"; $("ver").appendChild(o); }
+
+function analyse(){
+  if(!curImage) return;
+  const w=curImage.width, h=curImage.height;
+  const cv=document.createElement("canvas"); cv.width=w; cv.height=h;
+  const cx=cv.getContext("2d",{willReadFrequently:true});
+  cx.drawImage(curImage,0,0);
+  const px=cx.getImageData(0,0,w,h).data;
+  const opt={mode:$("mode").value,rgb:pickRGB,tol:+$("tol").value,smooth:+$("smooth").value};
+  let masks, fs, geo, best, res;
+  try{
+    masks=classify(px,w,h,opt);
+    fs=findFinders(masks.dark,masks.occl,w,h);
+    if(!fs.length) throw new Error("No finder pattern could be located. Is the image an "+
+      "upright QR scan? Try cropping to the symbol, or switch the redaction setting.");
+    const forced=+$("ver").value||0;
+    geo=locateSymbol(masks.dark,w,h,fs,forced?17+4*forced:0);
+    best=chooseGrid(masks,w,h,geo,forced||0);
+    res=decodeSymbol(best.mat,best.g.n,best.v);
+    res.orient=best.o; res.geo=best.g;
+  }catch(e){ drawSource(fs||[],geo); showFailure(e.message); return; }
+  lastResult=res; lastGeo=best.g;
+  drawSource(fs,best.g);
+  showResult(res);
+}
+
+function drawSource(fs,geo){
+  const cv=$("src"), maxW=520;
+  const s=Math.min(1,maxW/curImage.width);
+  cv.width=Math.round(curImage.width*s); cv.height=Math.round(curImage.height*s);
+  const g=cv.getContext("2d");
+  g.imageSmoothingEnabled=false;
+  g.drawImage(curImage,0,0,cv.width,cv.height);
+  const css=getComputedStyle(document.documentElement);
+  if(geo){
+    const m=geo.module*s, x=geo.x0*s, y=geo.y0*s, n=geo.n;
+    g.strokeStyle=css.getPropertyValue("--accent").trim(); g.lineWidth=1.5;
+    g.strokeRect(x,y,m*n,m*n);
+    if(n<=60){ g.globalAlpha=.28; g.lineWidth=.5;
+      for(let i=1;i<n;i++){ g.beginPath(); g.moveTo(x+i*m,y); g.lineTo(x+i*m,y+m*n);
+        g.moveTo(x,y+i*m); g.lineTo(x+m*n,y+i*m); g.stroke(); }
+      g.globalAlpha=1; }
+  }
+  g.strokeStyle=css.getPropertyValue("--marker").trim(); g.lineWidth=1.5;
+  for(const f of (fs||[])){ const m=f[2]*s;
+    g.strokeRect(f[0]*s-3.5*m,f[1]*s-3.5*m,7*m,7*m); }
+}
+
+function drawMap(res){
+  const n=res.n, cell=Math.max(4,Math.min(12,Math.floor(420/n)));
+  const cv=$("map"); cv.width=n*cell; cv.height=n*cell;
+  const g=cv.getContext("2d");
+  const css=getComputedStyle(document.documentElement);
+  const dark=css.getPropertyValue("--mod-dark").trim();
+  const light=css.getPropertyValue("--mod-light").trim();
+  const mark=css.getPropertyValue("--marker").trim();
+  g.fillStyle=light; g.fillRect(0,0,cv.width,cv.height);
+  for(let r=0;r<n;r++) for(let c=0;c<n;c++){
+    if(res.matrix[r*n+c]===1){ g.fillStyle=dark; g.fillRect(c*cell,r*cell,cell,cell); } }
+  g.strokeStyle=mark; g.lineWidth=Math.max(1,cell*0.18);
+  for(let r=0;r<n;r++) for(let c=0;c<n;c++){
+    if(res.raw[r*n+c]===UNK){
+      g.strokeRect(c*cell+g.lineWidth/2,r*cell+g.lineWidth/2,
+                   cell-g.lineWidth,cell-g.lineWidth); } }
+}
+
+function drawOut(res){
+  const n=res.n, q=4, cell=8, side=(n+2*q)*cell;
+  const cv=document.createElement("canvas"); cv.width=side; cv.height=side;
+  const g=cv.getContext("2d");
+  g.fillStyle="#FFFFFF"; g.fillRect(0,0,side,side);
+  g.fillStyle="#000000";
+  for(let r=0;r<n;r++) for(let c=0;c<n;c++)
+    if(res.matrix[r*n+c]===1) g.fillRect((c+q)*cell,(r+q)*cell,cell,cell);
+  $("out").src=cv.toDataURL("image/png");
+  $("out").alt="Repaired QR code containing: "+res.text;
+}
+
+function setVerdict(cls,title,sub){
+  const v=$("verdict"); v.className="verdict "+cls;
+  v.innerHTML='<span class="dot"></span><span class="t"></span><span class="s"></span>';
+  v.querySelector(".t").textContent=title; v.querySelector(".s").textContent=sub;
+}
+function showFailure(msg){
+  setVerdict("v-bad","Not recovered",msg);
+  $("payload").textContent="—"; $("payload").className="payload empty";
+  $("facts").innerHTML=""; $("rswrap").hidden=true; $("segwrap").hidden=true;
+  $("notes").hidden=true; lastResult=null;
+}
+function showResult(r){
+  if(r.certain) setVerdict("v-ok","Certain",
+    "every block decoded inside the unique-decoding bound");
+  else setVerdict("v-warn","Probable",
+    "a block went past the unique-decoding bound, or a visible module disagrees");
+  $("payload").textContent=r.text||"(empty payload)";
+  $("payload").className="payload";
+  const F=[["Symbol","version "+r.version+"  "+r.n+"×"+r.n],
+    ["Error correction","level "+r.ecl],["Data mask",String(r.mask)],
+    ["Module pitch",r.geo.module.toFixed(2)+" px"],
+    ["Finders located",r.geo.finders.length+" of 3"],
+    ["Orientation",(r.orient.rot*90)+"°"+(r.orient.mir?", mirrored":"")],
+    ["Structure fit",r.orient.score.toFixed(3)],
+    ["Obscured modules",r.obscured+" of "+(r.n*r.n)],
+    ["Erased data bits",String(r.erasedData)],
+    ["Visible conflicts",String(r.mismatch)]];
+  $("facts").innerHTML=F.map(([k,v])=>"<dt>"+k+"</dt><dd>"+esc(v)+"</dd>").join("");
+  $("rsbody").innerHTML=r.blocks.map(b=>{
+    const pct=Math.min(100,Math.round(100*b.used/b.capacity));
+    return "<tr><td>"+b.block+"</td><td>"+b.data+"</td><td>"+b.ec+"</td><td>"+
+      b.erasures+"</td><td>"+b.errors+"</td><td>"+b.used+"/"+b.capacity+
+      '<span class="bar'+(b.ok?"":" hot")+'"><i style="width:'+pct+'%"></i></span></td></tr>';
+  }).join("");
+  $("rswrap").hidden=false;
+  $("segs").innerHTML=r.segments.map(s=>
+    '<span class="k">'+esc(s[0])+'</span><span class="n">'+(s[1]==null?"":s[1])+
+    '</span><span class="v">'+esc(String(s[2]).slice(0,120))+"</span>").join("");
+  $("segwrap").hidden=false;
+  if(r.notes.length){ $("notes").hidden=false;
+    $("notes").innerHTML="<ul>"+r.notes.map(x=>"<li>"+esc(x)+"</li>").join("")+"</ul>"; }
+  else $("notes").hidden=true;
+  drawMap(r); drawOut(r);
+}
+function esc(s){ return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",
+  ">":"&gt;",'"':"&quot;"}[c])); }
+
+function reportText(){
+  const r=lastResult; if(!r) return "No symbol recovered.";
+  let t="QR RECOVERY REPORT ("+curName+")\n";
+  t+="Symbol            : version "+r.version+"  "+r.n+"x"+r.n+"\n";
+  t+="Error correction  : level "+r.ecl+"\nData mask         : "+r.mask+"\n";
+  t+="Module pitch      : "+r.geo.module.toFixed(3)+" px  origin ("+
+     r.geo.x0.toFixed(1)+", "+r.geo.y0.toFixed(1)+")\n";
+  t+="Finders located   : "+r.geo.finders.length+" of 3\n";
+  t+="Orientation       : "+(r.orient.rot*90)+" deg"+(r.orient.mir?", mirrored":"")+"\n";
+  t+="Structure fit     : "+r.orient.score.toFixed(3)+"\n";
+  t+="Obscured modules  : "+r.obscured+" total; "+r.erasedData+" in the data/EC area\n";
+  t+="Visible conflicts : "+r.mismatch+"\n\nReed-Solomon per block\n";
+  t+="  blk  data  ec  erasures  errors  budget\n";
+  for(const b of r.blocks) t+="  "+String(b.block).padStart(3)+String(b.data).padStart(6)+
+    String(b.ec).padStart(4)+String(b.erasures).padStart(10)+String(b.errors).padStart(8)+
+    "  "+b.used+"/"+b.capacity+(b.ok?" OK":" OVER")+"\n";
+  t+="\nVerdict           : "+(r.certain?
+    "CERTAIN - unique decode, no other message fits this symbol":
+    "PROBABLE - outside the unique-decoding bound")+"\n";
+  for(const nt of r.notes) t+="Note              : "+nt+"\n";
+  t+="\nSegments\n";
+  for(const s of r.segments) t+="  "+String(s[0]).padEnd(18)+String(s[1]==null?"":s[1]).padStart(4)+
+    "  "+s[2]+"\n";
+  t+="\nPAYLOAD:\n"+r.text+"\n";
+  return t;
+}
+function copy(text){
+  const ok=()=>{ const c=$("copied"); c.hidden=false; setTimeout(()=>{c.hidden=true;},1400); };
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(ok,()=>fallback(text,ok));
+  } else fallback(text,ok);
+}
+function fallback(text,ok){
+  const ta=document.createElement("textarea"); ta.value=text;
+  ta.style.position="fixed"; ta.style.opacity="0"; document.body.appendChild(ta);
+  ta.select(); try{ document.execCommand("copy"); ok(); }catch(e){}
+  document.body.removeChild(ta);
+}
+
+function loadFile(file){
+  if(!file||!file.type.startsWith("image/")) return;
+  const url=URL.createObjectURL(file);
+  loadURL(url,file.name);
+}
+function loadURL(url,name){
+  const im=new Image();
+  im.onload=()=>{ curImage=im; curName=name; $("srcname").textContent=name;
+    pickRGB=null; analyse(); };
+  im.onerror=()=>showFailure("That file could not be read as an image.");
+  im.src=url;
+}
+
+$("pick").addEventListener("click",()=>$("file").click());
+$("drop").addEventListener("click",()=>$("file").click());
+$("drop").addEventListener("keydown",e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); $("file").click(); }});
+$("file").addEventListener("change",e=>{ if(e.target.files[0]) loadFile(e.target.files[0]); });
+$("loadSample").addEventListener("click",()=>{ $("ver").value="0"; $("mode").value="auto";
+  loadURL(SAMPLE,"sample"); });
+["dragenter","dragover"].forEach(t=>$("drop").addEventListener(t,e=>{
+  e.preventDefault(); $("drop").classList.add("over"); }));
+["dragleave","drop"].forEach(t=>$("drop").addEventListener(t,e=>{
+  e.preventDefault(); $("drop").classList.remove("over"); }));
+$("drop").addEventListener("drop",e=>{ if(e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]); });
+window.addEventListener("paste",e=>{
+  const items=e.clipboardData&&e.clipboardData.items;
+  if(!items) return;
+  for(const it of items) if(it.type.startsWith("image/")){ loadFile(it.getAsFile()); break; }
+});
+$("src").addEventListener("click",e=>{
+  if($("mode").value!=="pick"||!curImage) return;
+  e.stopPropagation();
+  const cv=$("src"), r=cv.getBoundingClientRect();
+  const x=Math.floor((e.clientX-r.left)/r.width*cv.width);
+  const y=Math.floor((e.clientY-r.top)/r.height*cv.height);
+  const d=cv.getContext("2d").getImageData(x,y,1,1).data;
+  pickRGB=[d[0],d[1],d[2]];
+  $("hint").textContent="sampled rgb("+d[0]+", "+d[1]+", "+d[2]+") as the redaction colour";
+  analyse();
+},true);
+$("mode").addEventListener("change",()=>{ pickRGB=null;
+  $("hint").textContent=$("mode").value==="pick"
+    ? "click the redaction on the image to sample its colour"
+    : "drop an image · click to browse · or paste with Ctrl+V";
+  analyse(); });
+$("tol").addEventListener("input",()=>{ $("tolv").textContent=$("tol").value; });
+$("tol").addEventListener("change",analyse);
+$("smooth").addEventListener("input",()=>{ $("smv").textContent=$("smooth").value; });
+$("smooth").addEventListener("change",analyse);
+$("ver").addEventListener("change",analyse);
+$("rerun").addEventListener("click",analyse);
+$("copy").addEventListener("click",()=>copy(lastResult?lastResult.text:""));
+$("copyreport").addEventListener("click",()=>copy(reportText()));
+
+loadURL(SAMPLE,"sample");
+</script>
+</body>
+</html>
